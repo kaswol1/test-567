@@ -31,7 +31,7 @@ if not JIRA_DOMAIN:
 
 # --- KONFIGURACJA PROJEKTU JIRA ---
 JIRA_PROJECT_KEY = "RQIMP" # Klucz projektu Jira, np. "RQIMP"
-JIRA_ISSUE_TYPE = "Zadanie."    # Typ zadania Jira, np. "Task", "Story", "Bug"
+JIRA_ISSUE_TYPE = "Zadanie"    # Typ zadania Jira, np. "Task", "Story", "Bug"
 
 # --- MAPOWANIE PÓL NIESTANDARDOWYCH ---
 
