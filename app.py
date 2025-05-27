@@ -28,7 +28,7 @@ if not JIRA_DOMAIN:
 
 # --- KONFIGURACJA PROJEKTU JIRA ---
 # Używamy ID projektu zamiast klucza, zgodnie z ostatnimi ustaleniami.
-JIRA_PROJECT_ID = "10052" # <-- Zmieniono z klucza na ID projektu!
+JIRA_PROJECT_ID = "10033" # <-- Zmieniono z klucza na ID projektu!
 JIRA_ISSUE_TYPE = "Zadanie" # Używamy polskiej nazwy.
 
 # --- MAPOWANIE PÓL NIESTANDARDOWYCH ---
