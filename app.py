@@ -27,8 +27,9 @@ if not JIRA_DOMAIN:
     logging.error("BŁĄD KONFIGURACJI: Zmienna środowiskowa JIRA_DOMAIN nie jest ustawiona. Np. 'yourcompany.atlassian.net'")
 
 # --- KONFIGURACJA PROJEKTU JIRA ---
-JIRA_PROJECT_KEY = "RQIMP"
-JIRA_ISSUE_TYPE = "Zadanie" # Używamy polskiej nazwy, jak ustaliłyśmy.
+# Używamy ID projektu zamiast klucza, zgodnie z ostatnimi ustaleniami.
+JIRA_PROJECT_ID = "43" # <-- Zmieniono z klucza na ID projektu!
+JIRA_ISSUE_TYPE = "Zadanie" # Używamy polskiej nazwy.
 
 # --- MAPOWANIE PÓL NIESTANDARDOWYCH ---
 
@@ -52,9 +53,10 @@ JIRA_CUSTOM_FIELDS_IDS = {
 }
 
 # --- KONFIGURACJA WARTOŚCI DLA POLA "REQUEST TYPE" (customfield_10010) ---
-# TA WARTOŚĆ JEST KLUCZOWA. ZMIENISZ JĄ PO ODCZYTANIU LOGÓW Z RENDER.COM!
-# BĘDZIE WYGLĄDAĆ NP. {"id": "10002"} LUB {"value": "Nazwa Typu Wniosku"}
-JIRA_REQUEST_TYPE_VALUE = {"value": "YOUR_EXACT_REQUEST_TYPE_NAME_FROM_JIRA_LOGS"} # <-- ZMIEŃ TO PO ODCZYTANIU LOGÓW!
+# TA WARTOŚĆ JEST KLUCZOWA. Prawdopodobnie będzie to ID opcji, np. {"id": "10002"}.
+# PONIEWAŻ NIE UDAŁO NAM SIĘ TEGO WYCIĄGNĄĆ Z LOGÓW, UŻYWAMY TERAZ PLACEHOLDERU
+# Z ZAAKŁADANYM FORMATEM. JEŚLI BĘDZIE BŁĄD, BĘDZIE TO WYNIKAŁO Z TEJ WARTOŚCI.
+JIRA_REQUEST_TYPE_VALUE = {"value": "YOUR_EXACT_REQUEST_TYPE_NAME_FROM_JIRA_LOGS"} # <-- Nadal wymaga uzupełnienia!
 
 
 # Mapowanie opcji dla pola 'Typ Prezentacji Technicznej'
@@ -76,7 +78,7 @@ def log_jira_createmeta_details():
 
     url = (
         f"https://{JIRA_DOMAIN}/rest/api/3/issue/createmeta?"
-        f"projectKeys={JIRA_PROJECT_KEY}&issueTypeNames={JIRA_ISSUE_TYPE}&expand=projects.issuetypes.fields"
+        f"projectIds={JIRA_PROJECT_ID}&issueTypeNames={JIRA_ISSUE_TYPE}&expand=projects.issuetypes.fields" # Używamy projectIds!
     )
     auth = (JIRA_EMAIL, JIRA_API_TOKEN)
     headers = {"Accept": "application/json"}
@@ -88,19 +90,19 @@ def log_jira_createmeta_details():
 
         projects = createmeta_data.get('projects', [])
         
-        # Zapewnienie, że znaleziono projekt i typ zadania
         found_project = False
         found_issue_type = False
 
         for project in projects:
-            if project.get('key') == JIRA_PROJECT_KEY:
+            # Sprawdzamy po ID projektu, a nie po kluczu
+            if str(project.get('id')) == JIRA_PROJECT_ID: 
                 found_project = True
                 issue_types = project.get('issueTypes', [])
                 for issue_type in issue_types:
                     if issue_type.get('name') == JIRA_ISSUE_TYPE:
                         found_issue_type = True
                         fields = issue_type.get('fields', {})
-                        logging.info(f"\n--- METADANE PÓL DLA PROJEKTU '{JIRA_PROJECT_KEY}' I TYPU ZADANIA '{JIRA_ISSUE_TYPE}' ---")
+                        logging.info(f"\n--- METADANE PÓL DLA PROJEKTU (ID: {JIRA_PROJECT_ID}) I TYPU ZADANIA '{JIRA_ISSUE_TYPE}' ---")
                         
                         required_fields_info = {}
                         request_type_field_details_found = None
@@ -133,8 +135,8 @@ def log_jira_createmeta_details():
                             if request_type_field_details_found.get('allowedValues'):
                                 logging.info("  Dostępne opcje (allowedValues) dla pola Request Type:")
                                 for option in request_type_field_details_found['allowedValues']:
+                                    # TE LINIE SĄ KLUCZOWE - TUTAJ BĘDZIESZ SZUKAĆ PRAWIDŁOWEJ WARTOŚCI DLA JIRA_REQUEST_TYPE_VALUE
                                     logging.info(f"    - Value: '{option.get('value')}', ID: '{option.get('id')}'")
-                                    # TE LINIE SĄ KLUCZOWE - BĘDZIESZ Z NICH KORZYSTAĆ DO UZUPEŁNIENIA JIRA_REQUEST_TYPE_VALUE
                             else:
                                 logging.info("  Brak dostępnych opcji (allowedValues) dla tego pola Request Type. Może być polem tekstowym lub innym.")
                         else:
@@ -144,9 +146,9 @@ def log_jira_createmeta_details():
                         return # Zakończ po znalezieniu i zalogowaniu
 
         if not found_project:
-            logging.error(f"Projekt '{JIRA_PROJECT_KEY}' nie został znaleziony w metadanych Jira createmeta.")
+            logging.error(f"Projekt (ID: {JIRA_PROJECT_ID}) nie został znaleziony w metadanych Jira createmeta.")
         elif not found_issue_type:
-            logging.error(f"Typ zadania '{JIRA_ISSUE_TYPE}' nie został znaleziony w projekcie '{JIRA_PROJECT_KEY}' w metadanych Jira createmeta.")
+            logging.error(f"Typ zadania '{JIRA_ISSUE_TYPE}' nie został znaleziony w projekcie (ID: {JIRA_PROJECT_ID}) w metadanych Jira createmeta.")
 
     except requests.exceptions.RequestException as e:
         logging.error(f"Błąd podczas pobierania metadanych Jira createmeta (sprawdź JIRA_DOMAIN, EMAIL, API_TOKEN, uprawnienia): {e}")
@@ -156,7 +158,7 @@ def log_jira_createmeta_details():
         logging.error(f"Nieoczekiwany błąd podczas analizy metadanych Jira: {e}", exc_info=True)
 
 
-# --- POZOSTAŁE FUNKCJE POMOCNICZE (KOMUNIKACJA Z API) ---
+# --- FUNKCJE POMOCNICZE (KOMUNIKACJA Z API) ---
 def get_deal_from_pipedrive(deal_id):
     """Pobiera szczegóły deala z Pipedrive."""
     if not PIPEDRIVE_API_TOKEN:
@@ -233,7 +235,7 @@ def create_jira_issue(fields_to_create):
 
     jira_issue_payload = {
         "fields": {
-            "project": {"key": JIRA_PROJECT_KEY},
+            "project": {"id": JIRA_PROJECT_ID}, # <--- Używamy ID projektu 43!
             "summary": fields_to_create.get("summary_notatka", "Nowy deal Pipedrive (brak notatki)"),
             "description": f"Organizacja: {fields_to_create.get('org_name', 'Brak nazwy organizacji')}\n"
                            f"Deal ID: {fields_to_create.get('deal_id', 'Brak ID deala')}",
