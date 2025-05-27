@@ -2,13 +2,12 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import logging
-import io # Importujemy moduł do obsługi strumieni bajtów w pamięci
+import io
 
 # --- KONFIGURACJA APLIKACJI FLASK ---
 app = Flask(__name__)
 
 # --- KONFIGURACJA LOGOWANIA ---
-# Ustawienie poziomu logowania na INFO, aby widzieć więcej szczegółów w logach Render.com
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- KONFIGURACJA DANYCH DOSTĘPOWYCH API (ZMIENNE ŚRODOWISKOWE Z RENDER.COM) ---
@@ -18,8 +17,6 @@ JIRA_EMAIL = os.getenv("JIRA_EMAIL")
 JIRA_DOMAIN = os.getenv("JIRA_DOMAIN") # Np. twojafirma.atlassian.net
 
 # Sprawdzenie, czy wszystkie kluczowe zmienne środowiskowe są ustawione
-# Aplikacja będzie logować błędy, jeśli ich brakuje, ale nie przerwie działania,
-# dopóki nie spróbuje użyć brakującego tokena.
 if not PIPEDRIVE_API_TOKEN:
     logging.error("BŁĄD KONFIGURACJI: Zmienna środowiskowa PIPEDRIVE_API_TOKEN nie jest ustawiona.")
 if not JIRA_API_TOKEN:
@@ -30,33 +27,38 @@ if not JIRA_DOMAIN:
     logging.error("BŁĄD KONFIGURACJI: Zmienna środowiskowa JIRA_DOMAIN nie jest ustawiona. Np. 'yourcompany.atlassian.net'")
 
 # --- KONFIGURACJA PROJEKTU JIRA ---
-JIRA_PROJECT_KEY = "RQIMP" # Klucz projektu Jira, np. "RQIMP"
-JIRA_ISSUE_TYPE = "Zadanie"    # Typ zadania Jira, np. "Task", "Story", "Bug"
+JIRA_PROJECT_KEY = "RQIMP"
+JIRA_ISSUE_TYPE = "Zadanie" # Zmieniono na polską nazwę, jak ustaliliśmy.
 
 # --- MAPOWANIE PÓL NIESTANDARDOWYCH ---
 
-# Hashe pól niestandardowych Pipedrive (z Twojej instancji Pipedrive)
 PIPEDRIVE_CUSTOM_FIELDS_HASHES = {
     "typ_prezentacji_tech": "5bc985e61592b58e001c657305423499b6a23ce4",
     "data_1": "77554ed03246265be68e75bc152243b19d492d9f",
     "data_2": "348bc2d5699beb5a76ae34f9318055a0bbbef3a8",
     "data_3": "db137c6e874446aaa7e42d1638538f5138786633",
-    "partner_org_field": "fea50f9d3ff5801b5fa9c451a8110445442db46d" # Pole 'Partner' z obiektu organizacji
+    "partner_org_field": "fea50f9d3ff5801b5fa9c451a8110445442db46d",
+    "notatka_summary": "b1d7a6fb7866d3e88f0eb486ae1032012bf8295b"
 }
 
-# ID pól niestandardowych Jira (z Twojej instancji Jira)
 JIRA_CUSTOM_FIELDS_IDS = {
     "typ_prezentacji_tech": "customfield_1008",
     "klient": "customfield_10086",
     "data_1": "customfield_10090",
     "data_2": "customfield_10089",
     "data_3": "customfield_10091",
-    "partner": "customfield_10092"
+    "partner": "customfield_10092",
+    "request_type_field": "customfield_10010" # ID pola Request Type
 }
 
+# --- KONFIGURACJA WARTOŚCI DLA POLA "REQUEST TYPE" (customfield_10010) ---
+# NA RAZIE UŻYWAMY PLACEHOLDERU. PO URUCHOMIENIU TEGO KODU,
+# Z LOGÓW ODCZYTASZ PRAWIDŁOWĄ WARTOŚĆ I UZUPEŁNISZ JĄ TUTAJ.
+# Przykład: JIRA_REQUEST_TYPE_VALUE = {"id": "12345"} LUB {"value": "Nazwa Typu Wniosku"}
+JIRA_REQUEST_TYPE_VALUE = {"value": "YOUR_EXACT_REQUEST_TYPE_NAME_FROM_JIRA"} # <-- ZMIEŃ TO PO UZYSKANIU DANYCH Z LOGÓW!
+
+
 # Mapowanie opcji dla pola 'Typ Prezentacji Technicznej'
-# Klucz: ID opcji z Pipedrive (jako string)
-# Wartość: Obiekt oczekiwany przez Jira dla pola typu 'Single/Multi Choice Select'
 TYP_PREZENTACJI_MAPPING = {
     "32": {"id": "32"}, # Prezentacja wprowadzająca
     "33": {"id": "33"}, # Prezentacja techniczna
@@ -65,8 +67,84 @@ TYP_PREZENTACJI_MAPPING = {
     "70": {"id": "70"}, # Rozmowa referencyjna
 }
 
-# --- FUNKCJE POMOCNICZE (KOMUNIKACJA Z API) ---
+# --- FUNKCJA DO LOGOWANIA METADANYCH CREATEMETA (NOWO DODANA) ---
+def log_jira_createmeta_details():
+    """Pobiera i loguje szczegóły pól wymaganych oraz opcji dla Request Type."""
+    logging.info("Rozpoczynam pobieranie metadanych Jira createmeta...")
+    if not all([JIRA_DOMAIN, JIRA_EMAIL, JIRA_API_TOKEN]):
+        logging.error("Brak pełnych danych uwierzytelniających Jira do pobrania metadanych. Pomijam.")
+        return
 
+    url = (
+        f"https://{JIRA_DOMAIN}/rest/api/3/issue/createmeta?"
+        f"projectKeys={JIRA_PROJECT_KEY}&issueTypeNames={JIRA_ISSUE_TYPE}&expand=projects.issuetypes.fields"
+    )
+    auth = (JIRA_EMAIL, JIRA_API_TOKEN)
+    headers = {"Accept": "application/json"}
+
+    try:
+        response = requests.get(url, headers=headers, auth=auth)
+        response.raise_for_status()
+        createmeta_data = response.json()
+
+        projects = createmeta_data.get('projects', [])
+        for project in projects:
+            if project.get('key') == JIRA_PROJECT_KEY:
+                issue_types = project.get('issueTypes', [])
+                for issue_type in issue_types:
+                    if issue_type.get('name') == JIRA_ISSUE_TYPE:
+                        fields = issue_type.get('fields', {})
+                        logging.info(f"\n--- METADANE PÓL DLA PROJEKTU '{JIRA_PROJECT_KEY}' I TYPU ZADANIA '{JIRA_ISSUE_TYPE}' ---")
+                        
+                        required_fields = {}
+                        request_type_field_details = None
+
+                        for field_id, field_details in fields.items():
+                            field_name = field_details.get('name')
+                            is_required = field_details.get('required')
+                            schema_custom = field_details.get('schema', {}).get('custom')
+
+                            if is_required:
+                                required_fields[field_id] = field_name
+
+                            if field_id == JIRA_CUSTOM_FIELDS_IDS["request_type_field"]:
+                                request_type_field_details = field_details
+                                
+                        if required_fields:
+                            logging.info("--- POLA WYMAGANE (required: true) ---")
+                            for f_id, f_name in required_fields.items():
+                                logging.info(f"  - ID: {f_id}, Nazwa: {f_name}")
+                        else:
+                            logging.info("Brak pól oznaczonych jako 'wymagane: true' w metadanych dla tego typu zadania.")
+
+                        if request_type_field_details:
+                            logging.info(f"\n--- SZCZEGÓŁY POLA REQUEST TYPE ({JIRA_CUSTOM_FIELDS_IDS['request_type_field']}) ---")
+                            logging.info(f"  Nazwa pola: {request_type_field_details.get('name')}")
+                            logging.info(f"  Custom Type: {request_type_field_details.get('schema', {}).get('custom')}")
+                            if request_type_field_details.get('allowedValues'):
+                                logging.info("  Dostępne opcje (allowedValues):")
+                                for option in request_type_field_details['allowedValues']:
+                                    logging.info(f"    - Value: {option.get('value')}, ID: {option.get('id')}")
+                            else:
+                                logging.info("  Brak dostępnych opcji (allowedValues) dla tego pola Request Type. Może być polem tekstowym.")
+                        else:
+                            logging.warning(f"Nie znaleziono pola Request Type o ID '{JIRA_CUSTOM_FIELDS_IDS['request_type_field']}' w metadanych.")
+                        
+                        logging.info("\n--- KONIEC METADANYCH CREATEMETA ---")
+                        return
+
+        logging.warning(f"Nie znaleziono metadanych dla projektu '{JIRA_PROJECT_KEY}' i typu zadania '{JIRA_ISSUE_TYPE}'.")
+
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Błąd podczas pobierania metadanych Jira createmeta: {e}")
+        if response is not None:
+            logging.error(f"Odpowiedź Jira: {response.text}")
+    except Exception as e:
+        logging.error(f"Nieoczekiwany błąd podczas analizy metadanych Jira: {e}", exc_info=True)
+
+
+# --- POZOSTAŁE FUNKCJE POMOCNICZE (KOMUNIKACJA Z API) ---
+# ... (funkcje get_deal_from_pipedrive, get_organization_from_pipedrive, get_attachments_from_pipedrive, download_file_content_from_pipedrive pozostają bez zmian) ...
 def get_deal_from_pipedrive(deal_id):
     """Pobiera szczegóły deala z Pipedrive."""
     if not PIPEDRIVE_API_TOKEN:
@@ -75,7 +153,7 @@ def get_deal_from_pipedrive(deal_id):
     url = f"https://api.pipedrive.com/v1/deals/{deal_id}?api_token={PIPEDRIVE_API_TOKEN}"
     try:
         response = requests.get(url)
-        response.raise_for_status() # Wyrzuci wyjątek dla statusów 4xx/5xx
+        response.raise_for_status()
         return response.json().get("data")
     except requests.exceptions.RequestException as e:
         logging.error(f"Błąd podczas pobierania deala {deal_id} z Pipedrive: {e}")
@@ -108,7 +186,7 @@ def get_attachments_from_pipedrive(deal_id):
     try:
         response = requests.get(url)
         response.raise_for_status()
-        return response.json().get("data", []) # Zwraca listę obiektów plików
+        return response.json().get("data", [])
     except requests.exceptions.RequestException as e:
         logging.error(f"Błąd podczas pobierania załączników dla deala {deal_id} z Pipedrive: {e}")
         if response is not None:
@@ -122,9 +200,9 @@ def download_file_content_from_pipedrive(file_id):
         return None
     url = f"https://api.pipedrive.com/v1/files/{file_id}/download?api_token={PIPEDRIVE_API_TOKEN}"
     try:
-        response = requests.get(url, stream=True) # Używamy stream=True dla wydajności przy dużych plikach
+        response = requests.get(url, stream=True)
         response.raise_for_status()
-        return response.content # Zwraca surową zawartość pliku (bajty)
+        return response.content
     except requests.exceptions.RequestException as e:
         logging.error(f"Błąd podczas pobierania zawartości pliku {file_id} z Pipedrive: {e}")
         if response is not None:
@@ -141,19 +219,26 @@ def create_jira_issue(fields_to_create):
     auth = (JIRA_EMAIL, JIRA_API_TOKEN)
     headers = {"Content-Type": "application/json"}
 
-    # Struktura danych dla Jira API
     jira_issue_payload = {
         "fields": {
             "project": {"key": JIRA_PROJECT_KEY},
-            "summary": fields_to_create.get("deal_title", "Nowy deal (brak tytułu)"),
+            "summary": fields_to_create.get("summary_notatka", "Nowy deal Pipedrive (brak notatki)"),
             "description": f"Organizacja: {fields_to_create.get('org_name', 'Brak nazwy organizacji')}\n"
                            f"Deal ID: {fields_to_create.get('deal_id', 'Brak ID deala')}",
             "issuetype": {"name": JIRA_ISSUE_TYPE},
         }
     }
 
-    # Dodawanie pól niestandardowych tylko, jeśli mają wartości
-    # customfield_1008: Typ Prezentacji Technicznej (multi-select w Jira, oczekuje listy obiektów {"id": "..."})
+    # === DODANIE POLA "REQUEST TYPE" DLA JIRA SERVICE MANAGEMENT ===
+    # Wartość dla customfield_10010 jest pobierana z JIRA_REQUEST_TYPE_VALUE
+    if JIRA_CUSTOM_FIELDS_IDS["request_type_field"]:
+        jira_issue_payload["fields"][JIRA_CUSTOM_FIELDS_IDS["request_type_field"]] = JIRA_REQUEST_TYPE_VALUE
+    else:
+        logging.warning("ID pola 'Request Type' nie jest zdefiniowane w konfiguracji.")
+
+
+    # Dodawanie pozostałych pól niestandardowych tylko, jeśli mają wartości
+    # customfield_1008: Typ Prezentacji Technicznej (multi-select w Jira)
     if fields_to_create.get("typ_prezentacji_tech_jira_format"):
         jira_issue_payload["fields"][JIRA_CUSTOM_FIELDS_IDS["typ_prezentacji_tech"]] = \
             fields_to_create["typ_prezentacji_tech_jira_format"]
@@ -167,7 +252,7 @@ def create_jira_issue(fields_to_create):
     else:
         logging.info("Pole 'Klient' jest puste.")
 
-    # Pola dat (tekstowe, format YYYY-MM-DD)
+    # Pola dat (tekstowe, format incessantly-MM-DD)
     if fields_to_create.get("data_1"):
         jira_issue_payload["fields"][JIRA_CUSTOM_FIELDS_IDS["data_1"]] = fields_to_create["data_1"]
     if fields_to_create.get("data_2"):
@@ -187,7 +272,7 @@ def create_jira_issue(fields_to_create):
     response = None
     try:
         response = requests.post(url, auth=auth, json=jira_issue_payload, headers=headers)
-        response.raise_for_status() # Sprawdza, czy odpowiedź jest 2xx
+        response.raise_for_status()
         jira_response_data = response.json()
         logging.info(f"Zadanie Jira utworzone pomyślnie. Klucz: {jira_response_data.get('key')}, ID: {jira_response_data.get('id')}")
         return jira_response_data
@@ -201,15 +286,14 @@ def upload_attachment_to_jira(issue_id_or_key, filename, file_content):
     """Przesyła pojedynczy załącznik do zadania Jira."""
     if not all([JIRA_DOMAIN, JIRA_EMAIL, JIRA_API_TOKEN]):
         logging.error("Brak pełnych danych uwierzytelniających Jira. Nie można przesłać załącznika.")
-        return False # Zwróć False zamiast rzucać wyjątek, aby kontynuować dla innych załączników
+        return False
 
     url = f"https://{JIRA_DOMAIN}/rest/api/3/issue/{issue_id_or_key}/attachments"
     auth = (JIRA_EMAIL, JIRA_API_TOKEN)
     headers = {
-        "X-Atlassian-Token": "no-check" # Wymagane przez Jira dla załączników
+        "X-Atlassian-Token": "no-check"
     }
 
-    # Używamy io.BytesIO, aby traktować bajty pliku jako plik w pamięci
     files = {
         'file': (filename, io.BytesIO(file_content))
     }
@@ -224,7 +308,7 @@ def upload_attachment_to_jira(issue_id_or_key, filename, file_content):
         logging.error(f"Błąd podczas przesyłania załącznika '{filename}' do Jira {issue_id_or_key}: {e}")
         if response is not None:
             logging.error(f"Odpowiedź Jira (załącznik BŁĄD): {response.text}")
-        return False # Zwróć False, aby wskazać niepowodzenie
+        return False
 
 # --- ENDPOINT (Główna logika webhooka) ---
 @app.route("/webhook", methods=["POST"])
@@ -234,7 +318,6 @@ def pipedrive_webhook():
         request_data = request.json
         logging.info(f"Odebrano dane JSON z webhooka: {request_data}")
 
-        # Oczekujemy, że webhook Pipedrive wyśle tylko deal_id i org_id
         deal_id = request_data.get("deal_id")
         org_id = request_data.get("org_id")
 
@@ -245,41 +328,44 @@ def pipedrive_webhook():
 
         logging.info(f"Pobieranie szczegółów dla deal_id: {deal_id}, org_id: {org_id} z Pipedrive API.")
 
-        # Pobranie szczegółów deala z Pipedrive
         deal_data = get_deal_from_pipedrive(deal_id)
         if not deal_data:
             return jsonify({"error": f"Failed to retrieve deal {deal_id} from Pipedrive."}), 500
 
-        # Pobranie szczegółów organizacji z Pipedrive
         org_data = get_organization_from_pipedrive(org_id)
         if not org_data:
             return jsonify({"error": f"Failed to retrieve organization {org_id} from Pipedrive."}), 500
 
         # --- PRZETWARZANIE POBRANYCH DANYCH ---
-        # Pobieranie wartości pól niestandardowych z deala Pipedrive
         typ_prezentacji_pipedrive_val = deal_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["typ_prezentacji_tech"])
         data_1_val = deal_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["data_1"])
         data_2_val = deal_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["data_2"])
         data_3_val = deal_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["data_3"])
+        notatka_summary_val = deal_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["notatka_summary"])
 
-        # Pobieranie wartości pola 'partner' z obiektu organizacji Pipedrive
         raw_partner_data = org_data.get(PIPEDRIVE_CUSTOM_FIELDS_HASHES["partner_org_field"])
-        # Sprawdzamy, czy to słownik i wyciągamy nazwę, w przeciwnym razie używamy wartości bez zmian
-        partner_val = raw_partner_data.get('name') if isinstance(raw_partner_data, dict) else raw_partner_data
+        partner_val = None
+        if raw_partner_data is None:
+            logging.info("Pole 'Partner' z Pipedrive jest puste (None).")
+        elif isinstance(raw_partner_data, dict):
+            partner_val = raw_partner_data.get('name')
+            logging.info(f"Pole 'Partner' z Pipedrive to słownik. Pobrano nazwę: {partner_val}")
+        elif isinstance(raw_partner_data, (str, int, float)):
+            partner_val = str(raw_partner_data)
+            logging.info(f"Pole 'Partner' z Pipedrive to prosty typ. Wartość: {partner_val}")
+        else:
+            partner_val = str(raw_partner_data)
+            logging.warning(f"Pole 'Partner' z Pipedrive ma nieoczekiwany typ ({type(raw_partner_data)}). Próba konwersji na string: {partner_val}")
 
         logging.info(f"Pobrane wartości z Pipedrive (po przetworzeniu): "
                      f"Typ Prezentacji: {typ_prezentacji_pipedrive_val}, "
                      f"Data 1: {data_1_val}, Data 2: {data_2_val}, Data 3: {data_3_val}, "
-                     f"Partner: {partner_val}")
+                     f"Partner: {partner_val} (Typ: {type(partner_val)}), "
+                     f"Notatka (Summary): {notatka_summary_val}")
 
-        # Mapowanie 'Typ Prezentacji Technicznej' z Pipedrive ID na format Jira Option ID
         typ_prezentacji_tech_jira_format = []
         if typ_prezentacji_pipedrive_val:
-            # Pipedrive dla pola typu 'set' zwraca listę ID, nawet jeśli jest tylko jeden wybrany
-            # lub pojedyncze ID jako string (co było w Twoim poprzednim teście).
-            # Zabezpieczamy się na oba przypadki:
             values_to_map = [str(typ_prezentacji_pipedrive_val)] if not isinstance(typ_prezentacji_pipedrive_val, list) else [str(v) for v in typ_prezentacji_pipedrive_val]
-
             for pid_option_id in values_to_map:
                 jira_option = TYP_PREZENTACJI_MAPPING.get(pid_option_id)
                 if jira_option:
@@ -289,18 +375,17 @@ def pipedrive_webhook():
         else:
             logging.info("Pole 'Typ Prezentacji Technicznej' z Pipedrive jest puste lub nie wybrane.")
 
-
-        # Przygotowanie słownika pól do przekazania do funkcji create_jira_issue
+        # --- Przygotowanie słownika pól do przekazania do funkcji create_jira_issue ---
         fields_for_jira_creation = {
-            "deal_id": deal_id, # Użyte w description Jira
-            "deal_title": deal_data.get("title"),
+            "deal_id": deal_id,
+            "summary_notatka": notatka_summary_val,
             "org_name": org_data.get("name"),
-            "klient": org_data.get("name"), # Pole Klient w Jira
+            "klient": org_data.get("name"),
             "typ_prezentacji_tech_jira_format": typ_prezentacji_tech_jira_format,
             "data_1": data_1_val,
             "data_2": data_2_val,
             "data_3": data_3_val,
-            "partner": partner_val # Teraz to powinien być czysty tekst lub None
+            "partner": partner_val
         }
 
         # --- TWORZENIE ZADANIA W JIRA ---
@@ -314,15 +399,13 @@ def pipedrive_webhook():
             pipedrive_attachments = get_attachments_from_pipedrive(deal_id)
 
             if pipedrive_attachments:
-                logging.info(f"Znaleziono {len(pipedrive_attachments)} załączników. Rozpoczynanie przesyłania do Jira {jira_issue_key}.")
+                logging.info(f"Znaleziono {len(pipedrive_attachments)} załączników dla deala {deal_id}. Rozpoczynanie przesyłania do Jira {jira_issue_key}.")
                 for attachment_info in pipedrive_attachments:
                     file_id = attachment_info.get('id')
                     file_name = attachment_info.get('file_name')
-
                     if file_id and file_name:
                         logging.info(f"Pobieranie pliku '{file_name}' (ID: {file_id}) z Pipedrive...")
                         file_content = download_file_content_from_pipedrive(file_id)
-
                         if file_content:
                             logging.info(f"Przesyłanie pliku '{file_name}' do zadania Jira {jira_issue_key}...")
                             upload_success = upload_attachment_to_jira(jira_issue_key, file_name, file_content)
@@ -350,8 +433,16 @@ def pipedrive_webhook():
         return jsonify({"error": f"An unexpected error occurred: {str(e)}"}), 500
 
 # --- Uruchomienie aplikacji (dla Render.com używany jest Gunicorn, lokalnie Flask) ---
+@app.route("/health") # Dodatkowy endpoint do sprawdzania statusu aplikacji
+def health_check():
+    return "OK", 200
+
 if __name__ == "__main__":
-    # Render.com udostępnia port poprzez zmienną środowiskową PORT
+    # Wywołaj funkcję logującą metadane Jira przy starcie aplikacji
+    # Daje to wgląd w wymagane pola i opcje Request Type w logach.
+    logging.info("Aplikacja startuje. Logowanie metadanych Jira createmeta...")
+    log_jira_createmeta_details()
+    logging.info("Logowanie metadanych zakończone. Aplikacja gotowa do odbierania webhooków.")
+
     port = int(os.environ.get("PORT", 5000))
-    # Uruchomienie aplikacji w trybie debugowania (tylko do rozwoju, nie na produkcję)
     app.run(host="0.0.0.0", port=port, debug=True)
