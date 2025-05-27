@@ -28,7 +28,7 @@ if not JIRA_DOMAIN:
 
 # --- KONFIGURACJA PROJEKTU JIRA ---
 JIRA_PROJECT_KEY = "RQIMP"
-JIRA_ISSUE_TYPE = "Zadanie" # Zmieniono na polską nazwę, jak ustaliliśmy.
+JIRA_ISSUE_TYPE = "Zadanie" # Używamy polskiej nazwy, jak ustaliłyśmy.
 
 # --- MAPOWANIE PÓL NIESTANDARDOWYCH ---
 
@@ -38,7 +38,7 @@ PIPEDRIVE_CUSTOM_FIELDS_HASHES = {
     "data_2": "348bc2d5699beb5a76ae34f9318055a0bbbef3a8",
     "data_3": "db137c6e874446aaa7e42d1638538f5138786633",
     "partner_org_field": "fea50f9d3ff5801b5fa9c451a8110445442db46d",
-    "notatka_summary": "b1d7a6fb7866d3e88f0eb486ae1032012bf8295b"
+    "notatka_summary": "b1d7a6fb7866d3e88f0eb486ae1032012bf8295b" # Klucz Pipedrive dla Notatki (Summary)
 }
 
 JIRA_CUSTOM_FIELDS_IDS = {
@@ -48,14 +48,13 @@ JIRA_CUSTOM_FIELDS_IDS = {
     "data_2": "customfield_10089",
     "data_3": "customfield_10091",
     "partner": "customfield_10092",
-    "request_type_field": "customfield_10010" # ID pola Request Type
+    "request_type_field": "customfield_10010" # ID pola "Request Type" dla Jira Service Management
 }
 
 # --- KONFIGURACJA WARTOŚCI DLA POLA "REQUEST TYPE" (customfield_10010) ---
-# NA RAZIE UŻYWAMY PLACEHOLDERU. PO URUCHOMIENIU TEGO KODU,
-# Z LOGÓW ODCZYTASZ PRAWIDŁOWĄ WARTOŚĆ I UZUPEŁNISZ JĄ TUTAJ.
-# Przykład: JIRA_REQUEST_TYPE_VALUE = {"id": "12345"} LUB {"value": "Nazwa Typu Wniosku"}
-JIRA_REQUEST_TYPE_VALUE = {"value": "YOUR_EXACT_REQUEST_TYPE_NAME_FROM_JIRA"} # <-- ZMIEŃ TO PO UZYSKANIU DANYCH Z LOGÓW!
+# TA WARTOŚĆ JEST KLUCZOWA. ZMIENISZ JĄ PO ODCZYTANIU LOGÓW Z RENDER.COM!
+# BĘDZIE WYGLĄDAĆ NP. {"id": "10002"} LUB {"value": "Nazwa Typu Wniosku"}
+JIRA_REQUEST_TYPE_VALUE = {"value": "YOUR_EXACT_REQUEST_TYPE_NAME_FROM_JIRA_LOGS"} # <-- ZMIEŃ TO PO ODCZYTANIU LOGÓW!
 
 
 # Mapowanie opcji dla pola 'Typ Prezentacji Technicznej'
@@ -67,12 +66,12 @@ TYP_PREZENTACJI_MAPPING = {
     "70": {"id": "70"}, # Rozmowa referencyjna
 }
 
-# --- FUNKCJA DO LOGOWANIA METADANYCH CREATEMETA (NOWO DODANA) ---
+# --- FUNKCJA DO LOGOWANIA METADANYCH CREATEMETA (WYWOŁYWANA RAZ PRZY STARCIE) ---
 def log_jira_createmeta_details():
     """Pobiera i loguje szczegóły pól wymaganych oraz opcji dla Request Type."""
     logging.info("Rozpoczynam pobieranie metadanych Jira createmeta...")
     if not all([JIRA_DOMAIN, JIRA_EMAIL, JIRA_API_TOKEN]):
-        logging.error("Brak pełnych danych uwierzytelniających Jira do pobrania metadanych. Pomijam.")
+        logging.error("Brak pełnych danych uwierzytelniających Jira do pobrania metadanych (API_TOKEN, EMAIL, DOMAIN). Pomijam funkcję log_jira_createmeta_details.")
         return
 
     url = (
@@ -88,55 +87,69 @@ def log_jira_createmeta_details():
         createmeta_data = response.json()
 
         projects = createmeta_data.get('projects', [])
+        
+        # Zapewnienie, że znaleziono projekt i typ zadania
+        found_project = False
+        found_issue_type = False
+
         for project in projects:
             if project.get('key') == JIRA_PROJECT_KEY:
+                found_project = True
                 issue_types = project.get('issueTypes', [])
                 for issue_type in issue_types:
                     if issue_type.get('name') == JIRA_ISSUE_TYPE:
+                        found_issue_type = True
                         fields = issue_type.get('fields', {})
                         logging.info(f"\n--- METADANE PÓL DLA PROJEKTU '{JIRA_PROJECT_KEY}' I TYPU ZADANIA '{JIRA_ISSUE_TYPE}' ---")
                         
-                        required_fields = {}
-                        request_type_field_details = None
+                        required_fields_info = {}
+                        request_type_field_details_found = None
 
                         for field_id, field_details in fields.items():
                             field_name = field_details.get('name')
                             is_required = field_details.get('required')
                             schema_custom = field_details.get('schema', {}).get('custom')
-
+                            
                             if is_required:
-                                required_fields[field_id] = field_name
+                                required_fields_info[field_id] = field_name
 
                             if field_id == JIRA_CUSTOM_FIELDS_IDS["request_type_field"]:
-                                request_type_field_details = field_details
+                                request_type_field_details_found = field_details
                                 
-                        if required_fields:
+                        if required_fields_info:
                             logging.info("--- POLA WYMAGANE (required: true) ---")
-                            for f_id, f_name in required_fields.items():
+                            for f_id, f_name in required_fields_info.items():
                                 logging.info(f"  - ID: {f_id}, Nazwa: {f_name}")
                         else:
                             logging.info("Brak pól oznaczonych jako 'wymagane: true' w metadanych dla tego typu zadania.")
 
-                        if request_type_field_details:
+                        if request_type_field_details_found:
                             logging.info(f"\n--- SZCZEGÓŁY POLA REQUEST TYPE ({JIRA_CUSTOM_FIELDS_IDS['request_type_field']}) ---")
-                            logging.info(f"  Nazwa pola: {request_type_field_details.get('name')}")
-                            logging.info(f"  Custom Type: {request_type_field_details.get('schema', {}).get('custom')}")
-                            if request_type_field_details.get('allowedValues'):
-                                logging.info("  Dostępne opcje (allowedValues):")
-                                for option in request_type_field_details['allowedValues']:
-                                    logging.info(f"    - Value: {option.get('value')}, ID: {option.get('id')}")
+                            logging.info(f"  Nazwa pola: {request_type_field_details_found.get('name')}")
+                            logging.info(f"  Typ Schematu: {request_type_field_details_found.get('schema', {}).get('type')}")
+                            logging.info(f"  Custom Type: {request_type_field_details_found.get('schema', {}).get('custom')}")
+                            logging.info(f"  Custom ID: {request_type_field_details_found.get('schema', {}).get('customId')}")
+
+                            if request_type_field_details_found.get('allowedValues'):
+                                logging.info("  Dostępne opcje (allowedValues) dla pola Request Type:")
+                                for option in request_type_field_details_found['allowedValues']:
+                                    logging.info(f"    - Value: '{option.get('value')}', ID: '{option.get('id')}'")
+                                    # TE LINIE SĄ KLUCZOWE - BĘDZIESZ Z NICH KORZYSTAĆ DO UZUPEŁNIENIA JIRA_REQUEST_TYPE_VALUE
                             else:
-                                logging.info("  Brak dostępnych opcji (allowedValues) dla tego pola Request Type. Może być polem tekstowym.")
+                                logging.info("  Brak dostępnych opcji (allowedValues) dla tego pola Request Type. Może być polem tekstowym lub innym.")
                         else:
-                            logging.warning(f"Nie znaleziono pola Request Type o ID '{JIRA_CUSTOM_FIELDS_IDS['request_type_field']}' w metadanych.")
+                            logging.warning(f"Nie znaleziono pola Request Type o ID '{JIRA_CUSTOM_FIELDS_IDS['request_type_field']}' w metadanych dla typu zadania '{JIRA_ISSUE_TYPE}'.")
                         
                         logging.info("\n--- KONIEC METADANYCH CREATEMETA ---")
-                        return
+                        return # Zakończ po znalezieniu i zalogowaniu
 
-        logging.warning(f"Nie znaleziono metadanych dla projektu '{JIRA_PROJECT_KEY}' i typu zadania '{JIRA_ISSUE_TYPE}'.")
+        if not found_project:
+            logging.error(f"Projekt '{JIRA_PROJECT_KEY}' nie został znaleziony w metadanych Jira createmeta.")
+        elif not found_issue_type:
+            logging.error(f"Typ zadania '{JIRA_ISSUE_TYPE}' nie został znaleziony w projekcie '{JIRA_PROJECT_KEY}' w metadanych Jira createmeta.")
 
     except requests.exceptions.RequestException as e:
-        logging.error(f"Błąd podczas pobierania metadanych Jira createmeta: {e}")
+        logging.error(f"Błąd podczas pobierania metadanych Jira createmeta (sprawdź JIRA_DOMAIN, EMAIL, API_TOKEN, uprawnienia): {e}")
         if response is not None:
             logging.error(f"Odpowiedź Jira: {response.text}")
     except Exception as e:
@@ -144,7 +157,6 @@ def log_jira_createmeta_details():
 
 
 # --- POZOSTAŁE FUNKCJE POMOCNICZE (KOMUNIKACJA Z API) ---
-# ... (funkcje get_deal_from_pipedrive, get_organization_from_pipedrive, get_attachments_from_pipedrive, download_file_content_from_pipedrive pozostają bez zmian) ...
 def get_deal_from_pipedrive(deal_id):
     """Pobiera szczegóły deala z Pipedrive."""
     if not PIPEDRIVE_API_TOKEN:
@@ -229,8 +241,8 @@ def create_jira_issue(fields_to_create):
         }
     }
 
-    # === DODANIE POLA "REQUEST TYPE" DLA JIRA SERVICE MANAGEMENT ===
-    # Wartość dla customfield_10010 jest pobierana z JIRA_REQUEST_TYPE_VALUE
+    # === DODANIE POLA "REQUEST TYPE" DLA JIRA SERVICE MANAGEMENT (customfield_10010) ===
+    # Wartość jest pobierana z JIRA_REQUEST_TYPE_VALUE, którą UZUPEŁNISZ PO ODCZYTANIU LOGÓW.
     if JIRA_CUSTOM_FIELDS_IDS["request_type_field"]:
         jira_issue_payload["fields"][JIRA_CUSTOM_FIELDS_IDS["request_type_field"]] = JIRA_REQUEST_TYPE_VALUE
     else:
